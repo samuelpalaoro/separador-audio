@@ -1,0 +1,66 @@
+# ==============================================================================
+# .gitignore — Moises AI Audio Separator
+# ==============================================================================
+
+# Ambientes virtuais Python
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Bytecode e caches Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Arquivos de áudio e testes gerados
+*.wav
+*.wave
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.aac
+test_song.wav
+test_output_stems/
+
+# Bibliotecas locais do sistema baixadas pelo instalador
+lib/
+*.deb
+
+# Modelos neurais, checkpoints e caches PyTorch / TorchHub
+.cache/
+checkpoints/
+models/
+*.pt
+*.pth
+*.bin
+*.onnx
+
+# IDEs e editores de texto
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Logs e arquivos temporários
+*.log
+tmp/
+temp/
