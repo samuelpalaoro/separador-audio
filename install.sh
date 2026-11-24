@@ -42,10 +42,25 @@ echo "[+] Atualizando pip, setuptools e wheel..."
 ./venv/bin/pip install --upgrade pip setuptools wheel
 
 # 4. Instalar dependências Python
-echo "[+] Instalando dependências (PyTorch, Demucs, PySide6, SoundFile, SoundDevice)..."
+echo "[+] Instalando dependências (PyTorch, Demucs, PySide6, SoundFile, SoundDevice, yt-dlp)..."
 ./venv/bin/pip install -r requirements.txt
 
-# 5. Garantir disponibilidade da biblioteca PortAudio (necessária para reprodução de áudio)
+# 5. Verificar e configurar FFmpeg
+echo "[+] Verificando utilitário FFmpeg no sistema..."
+if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "[!] FFmpeg não encontrado no PATH."
+    if sudo -n true 2>/dev/null; then
+        echo "[+] Instalando ffmpeg via apt..."
+        sudo apt-get update && sudo apt-get install -y ffmpeg
+    else
+        echo "[!] Aviso: Para habilitar download do YouTube e conversão de formatos,"
+        echo "    instale o FFmpeg com o comando: sudo apt install -y ffmpeg"
+    fi
+else
+    echo "[✓] FFmpeg detectado: $(ffmpeg -version | head -n 1)"
+fi
+
+# 6. Garantir disponibilidade da biblioteca PortAudio (necessária para reprodução de áudio)
 echo "[+] Verificando biblioteca de áudio PortAudio..."
 if [ ! -f "lib/usr/lib/x86_64-linux-gnu/libportaudio.so.2" ]; then
     if sudo -n true 2>/dev/null; then

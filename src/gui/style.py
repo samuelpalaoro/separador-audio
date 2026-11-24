@@ -264,4 +264,76 @@ QLabel[badge="true"] {
     font-size: 11px;
     font-weight: 600;
 }
+
+/* LineEdit (URL Input) */
+QLineEdit {
+    background-color: #141622;
+    border: 1px solid #2B2F44;
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: #F8FAFC;
+    font-size: 13px;
+    selection-background-color: #7C3AED;
+}
+
+QLineEdit:focus {
+    border-color: #8B5CF6;
+    background-color: #181B2A;
+}
+
+QLineEdit:disabled {
+    background-color: #10121A;
+    color: #555A70;
+    border-color: #1F2232;
+}
+
+/* Tab Widget & Bar */
+QTabWidget::pane {
+    border: 1px solid #282B3D;
+    background-color: #151722;
+    border-radius: 12px;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background-color: #12141F;
+    color: #94A3B8;
+    border: 1px solid #282B3D;
+    border-bottom: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    padding: 10px 22px;
+    font-weight: 700;
+    font-size: 13px;
+    margin-right: 4px;
+}
+
+QTabBar::tab:selected {
+    background-color: #151722;
+    color: #F8FAFC;
+    border-color: #8B5CF6;
+    border-bottom: 2px solid #151722;
+}
+
+QTabBar::tab:hover:!selected {
+    background-color: #1A1D2C;
+    color: #E2E8F0;
+}
+
+/* Action Success Button (Open Folder) */
+QPushButton[success="true"] {
+    background-color: #064E3B;
+    border: 1px solid #059669;
+    color: #6EE7B7;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-weight: 700;
+    font-size: 12px;
+}
+
+QPushButton[success="true"]:hover {
+    background-color: #059669;
+    color: #FFFFFF;
+}
+
 """
