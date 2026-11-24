@@ -37,13 +37,28 @@ def sanitize_stem_slug(stem_name: str) -> str:
     Examples:
         'Vocals (Voz)' -> 'vocals'
         'Drums (Bateria)' -> 'drums'
+        'Drum: Kick (Bumbo)' -> 'drum_kick'
+        'Drum: Snare (Caixa)' -> 'drum_snare'
+        'Drum: Hi-Hats (Chimbal)' -> 'drum_hihats'
+        'Drum: Cymbals (Pratos)' -> 'drum_cymbals'
+        'Drum: Toms (Tons)' -> 'drum_toms'
         'Bass (Baixo)' -> 'bass'
         'Other (Outros)' -> 'other'
         'Guitar (Guitarra)' -> 'guitar'
         'Piano' -> 'piano'
     """
     s = stem_name.lower()
-    if "vocal" in s or "voz" in s:
+    if "kick" in s or "bumbo" in s:
+        return "drum_kick"
+    elif "snare" in s or "caixa" in s:
+        return "drum_snare"
+    elif "hi-hat" in s or "hihat" in s or "chimbal" in s:
+        return "drum_hihats"
+    elif "cymbal" in s or "prato" in s:
+        return "drum_cymbals"
+    elif "tom" in s:
+        return "drum_toms"
+    elif "vocal" in s or "voz" in s:
         return "vocals"
     elif "drum" in s or "bater" in s:
         return "drums"

@@ -7,4 +7,6 @@ sounddevice>=0.4.6
 numpy>=1.24.0
 scipy>=1.10.0
 yt-dlp>=2024.0.0
+psutil>=5.9.0
+pytest>=8.0.0
 

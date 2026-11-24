@@ -78,7 +78,7 @@ def generate_synthetic_song(filepath: str, duration_sec: float = 3.0, sr: int = 
     sf.write(filepath, signal, sr, subtype=subtype, format="WAV")
 
 
-def test_1_import():
+def _run_test_1_import():
     print_header("TESTE 1 — IMPORTAÇÃO DE ARQUIVOS WAV")
     tmp_dir = tempfile.mkdtemp(prefix="test_import_")
     try:
@@ -159,7 +159,7 @@ def test_1_import():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def test_2_separation():
+def _run_test_2_separation():
     print_header("TESTE 2 — SEPARAÇÃO POR IA (DEMUCS HTDEMUCS)")
     tmp_dir = tempfile.mkdtemp(prefix="test_sep_")
     try:
@@ -220,7 +220,7 @@ def test_2_separation():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def test_3_playback(stems, sr):
+def run_test_3_playback(stems, sr):
     print_header("TESTE 3 — REPRODUÇÃO, MIXER E SINCRONIZAÇÃO")
     player = MultiTrackPlayer(sample_rate=sr)
     player.load_stems(stems, sample_rate=sr)
@@ -309,7 +309,7 @@ def test_3_playback(stems, sr):
     print("  [✓✓] TESTE 3 APROVADO COM SUCESSO TOTAL!")
 
 
-def test_4_export(stems, sr, meta):
+def run_test_4_export(stems, sr, meta):
     print_header("TESTE 4 — EXPORTAÇÃO DE STEMS EM WAV")
     tmp_out = tempfile.mkdtemp(prefix="test_export_")
     try:
@@ -371,7 +371,7 @@ def test_4_export(stems, sr, meta):
         shutil.rmtree(tmp_out, ignore_errors=True)
 
 
-def test_5_stability():
+def _run_test_5_stability():
     print_header("TESTE 5 — ESTABILIDADE, MEMÓRIA E CICLO DE VIDA")
     tmp_dir = tempfile.mkdtemp(prefix="test_stab_")
     try:
@@ -464,24 +464,29 @@ def main():
     print("==================================================================")
     
     # Executar Teste 1
-    test_1_import()
+    _run_test_1_import()
     
     # Executar Teste 2
-    stems, sr, meta = test_2_separation()
+    stems, sr, meta = _run_test_2_separation()
     
     # Executar Teste 3
-    test_3_playback(stems, sr)
+    run_test_3_playback(stems, sr)
     
     # Executar Teste 4
-    test_4_export(stems, sr, meta)
+    run_test_4_export(stems, sr, meta)
     
     # Executar Teste 5
-    test_5_stability()
+    _run_test_5_stability()
 
     print("\n" + "=" * 70)
     print("   [✓✓✓] TODOS OS 5 TESTES OBRIGATÓRIOS FORAM APROVADOS!        ")
     print("   O sistema é 100% funcional, estável, sem perdas e confiável. ")
     print("==================================================================")
+
+
+def test_canonical_rigorous_suite():
+    """Wrapper para compatibilidade com o pytest."""
+    main()
 
 
 if __name__ == "__main__":

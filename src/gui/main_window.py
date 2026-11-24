@@ -1,4 +1,8 @@
-"""Main Application Window for AI Audio Separation."""
+"""
+SamukaLab — Workstation Profissional Desktop de Áudio e Separação por IA.
+Janela Principal da Aplicação com Navegação em Sidebar, Mixer Multi-Track,
+Extração via yt-dlp, Conversão via FFmpeg e Decomposição de Bateria.
+"""
 import os
 import subprocess
 from typing import Dict, Optional, Any
@@ -7,12 +11,14 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QProgressBar, QScrollArea, QFrame,
     QFileDialog, QMessageBox, QCheckBox, QLineEdit, QTabWidget,
-    QApplication, QGridLayout
+    QApplication, QStackedWidget
 )
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QIcon
 
-from src.gui.style import MAIN_STYLESHEET, COLORS
+from src.gui.style import SAMUKALAB_STYLESHEET, MAIN_STYLESHEET, COLORS
+from src.gui.sidebar import SidebarWidget
+from src.gui.history_widget import HistoryWidget
+from src.gui.settings_widget import SettingsWidget
 from src.gui.drop_zone import DropZoneWidget
 from src.gui.stem_widget import StemWidget
 from src.gui.transport import TransportWidget
@@ -22,19 +28,22 @@ from src.downloader.youtube_downloader import YouTubeDownloader, InfoFetcherWork
 from src.audio.ffmpeg_converter import FFmpegService
 from src.audio.player import MultiTrackPlayer
 from src.audio.exporter import export_stem_to_wav, export_all_stems, sanitize_stem_slug
+from src.security.temp_manager import SafeTempManager
+from src.config.settings import SettingsManager
+from src.history.project_manager import ProjectHistoryManager
 from src.utils.system_info import get_system_hardware_info
 from src.utils.formatters import format_duration
 
 
 class MainWindow(QMainWindow):
-    """Primary Moises AI-inspired application window with YouTube & Local File support."""
+    """Estação de Trabalho Principal SamukaLab."""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Moises AI — Separador de Áudio por IA")
-        self.resize(1080, 820)
-        self.setMinimumSize(880, 640)
-        
+        self.setWindowTitle("SamukaLab — Audio DSP & AI Workstation")
+        self.resize(1120, 840)
+        self.setMinimumSize(920, 680)
+
         # Core state
         self.loaded_filepath: Optional[str] = None
         self.loaded_metadata: Optional[Dict[str, Any]] = None
@@ -42,38 +51,70 @@ class MainWindow(QMainWindow):
         self.stem_widgets: Dict[str, StemWidget] = {}
         self.stem_sample_rate: int = 44100
         self.current_output_folder: Optional[str] = None
-        
-        # Audio Player Engine
-        self.player = MultiTrackPlayer(sample_rate=44100)
-        self.pipeline_worker: Optional[UnifiedPipelineWorker] = None
-        self.info_fetcher: Optional[InfoFetcherWorker] = None
-        
-        # Services & Inspection
+
+        # Managers & Services
+        self.settings_mgr = SettingsManager()
+        self.history_mgr = ProjectHistoryManager()
         self.yt_downloader = YouTubeDownloader()
         self.ffmpeg_service = FFmpegService()
         self.hw_info = get_system_hardware_info()
 
-        # GUI Timer for thread-safe playback position polling
+        # Audio Player Engine
+        self.player = MultiTrackPlayer(sample_rate=44100)
+        self.pipeline_worker: Optional[UnifiedPipelineWorker] = None
+        self.info_fetcher: Optional[InfoFetcherWorker] = None
+
+        # GUI Playback Timer
         self.playback_timer = QTimer(self)
-        self.playback_timer.setInterval(40)  # ~25 FPS smooth timeline
+        self.playback_timer.setInterval(40)
         self.playback_timer.timeout.connect(self._on_playback_tick)
 
         self._init_ui()
-        self.setStyleSheet(MAIN_STYLESHEET)
+        self.setStyleSheet(SAMUKALAB_STYLESHEET)
 
     def _init_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        
-        root_layout = QVBoxLayout(central_widget)
+
+        root_layout = QHBoxLayout(central_widget)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        # 1. Header Bar
-        header = self._create_header()
-        root_layout.addWidget(header)
+        # 1. Left Sidebar
+        self.sidebar = SidebarWidget(self.hw_info, self)
+        self.sidebar.sig_page_changed.connect(self._on_page_changed)
+        root_layout.addWidget(self.sidebar)
 
-        # 2. Main Scroll Area for Content
+        # 2. Main Stacked Content Pages
+        self.pages_stack = QStackedWidget()
+
+        # Page 0: Estúdio de Separação
+        self.page_studio = self._create_studio_page()
+        self.pages_stack.addWidget(self.page_studio)
+
+        # Page 1: Histórico de Projetos
+        self.page_history = HistoryWidget(self)
+        self.pages_stack.addWidget(self.page_history)
+
+        # Page 2: Configurações
+        self.page_settings = SettingsWidget(self.hw_info, self)
+        self.page_settings.sig_settings_saved.connect(self._on_settings_saved)
+        self.pages_stack.addWidget(self.page_settings)
+
+        root_layout.addWidget(self.pages_stack, stretch=1)
+
+    def _create_studio_page(self) -> QWidget:
+        """Cria a página principal do Estúdio de Separação."""
+        studio_widget = QWidget()
+        studio_layout = QVBoxLayout(studio_widget)
+        studio_layout.setContentsMargins(0, 0, 0, 0)
+        studio_layout.setSpacing(0)
+
+        # Studio Header Bar
+        header = self._create_studio_header()
+        studio_layout.addWidget(header)
+
+        # Scroll Area for Content
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -82,35 +123,35 @@ class MainWindow(QMainWindow):
         content_container = QWidget()
         self.content_layout = QVBoxLayout(content_container)
         self.content_layout.setContentsMargins(28, 20, 28, 20)
-        self.content_layout.setSpacing(20)
+        self.content_layout.setSpacing(18)
 
-        # 2.1 Hardware banner (if low RAM or CPU warning)
+        # Hardware warning banner if low memory
         if self.hw_info.get("warning"):
             banner = self._create_hardware_banner(self.hw_info["warning"])
             self.content_layout.addWidget(banner)
 
-        # 2.2 Model & Settings Card
-        settings_card = self._create_settings_card()
+        # Model & Settings Card
+        settings_card = self._create_model_card()
         self.content_layout.addWidget(settings_card)
 
-        # 2.3 Input Source Tabs (YouTube URL or Local File)
+        # Input Tabs (YouTube URL or Local File)
         self.input_tabs = self._create_input_source_tabs()
         self.content_layout.addWidget(self.input_tabs)
 
-        # 2.4 Processing Action Panel
+        # Processing Action Card
         self.processing_card = self._create_processing_card()
         self.content_layout.addWidget(self.processing_card)
 
-        # 2.5 Separated Stems Container
+        # Separated Stems Container
         self.stems_card = self._create_stems_container()
         self.stems_card.setVisible(False)
         self.content_layout.addWidget(self.stems_card)
 
         self.content_layout.addStretch(1)
         scroll.setWidget(content_container)
-        root_layout.addWidget(scroll, stretch=1)
+        studio_layout.addWidget(scroll, stretch=1)
 
-        # 3. Bottom Master Transport Bar
+        # Bottom Master Transport Bar
         self.transport = TransportWidget()
         self.transport.sig_play_clicked.connect(self._on_transport_play)
         self.transport.sig_pause_clicked.connect(self._on_transport_pause)
@@ -118,147 +159,123 @@ class MainWindow(QMainWindow):
         self.transport.sig_seek_requested.connect(self._on_transport_seek)
         self.transport.sig_master_volume_changed.connect(self._on_master_volume_changed)
         self.transport.sig_export_all_requested.connect(self._on_export_all_requested)
-        root_layout.addWidget(self.transport)
+        studio_layout.addWidget(self.transport)
 
-    def _create_header(self) -> QWidget:
+        return studio_widget
+
+    def _create_studio_header(self) -> QWidget:
         header_frame = QFrame()
-        header_frame.setStyleSheet("""
-            QFrame {
-                background-color: #12141F;
-                border-bottom: 1px solid #282B3E;
-                padding: 12px 28px;
-            }
+        header_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS["bg_secondary"]};
+                border-bottom: 1px solid {COLORS["border"]};
+                padding: 10px 24px;
+            }}
         """)
         layout = QHBoxLayout(header_frame)
-        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setContentsMargins(12, 6, 12, 6)
 
-        # App Title & Subtitle
         title_box = QVBoxLayout()
-        title_box.setSpacing(2)
-        
-        lbl_brand = QLabel("MOISES AI — SEPARADOR DE ÁUDIO")
-        lbl_brand.setStyleSheet("font-size: 16px; font-weight: 800; color: #8B5CF6; letter-spacing: 1px;")
-        
-        lbl_sub = QLabel("Separação de Faixas Musicais (Stems) por Inteligência Artificial em Alta Resolução (Local & YouTube)")
-        lbl_sub.setStyleSheet("font-size: 11px; color: #94A3B8;")
-        
-        title_box.addWidget(lbl_brand)
-        title_box.addWidget(lbl_sub)
+        title_box.setSpacing(1)
+        lbl_head = QLabel("ESTÚDIO DE SEPARAÇÃO E PROCESSAMENTO")
+        lbl_head.setStyleSheet(f"font-size: 13px; font-weight: 800; color: {COLORS['text_primary']}; letter-spacing: 0.5px;")
+        lbl_desc = QLabel("Extração e separação neural de faixas musicais em alta fidelidade")
+        lbl_desc.setStyleSheet(f"font-size: 11px; color: {COLORS['text_secondary']};")
+        title_box.addWidget(lbl_head)
+        title_box.addWidget(lbl_desc)
         layout.addLayout(title_box)
 
         layout.addStretch()
 
-        # FFmpeg status indicator
         ffmpeg_ok = self.ffmpeg_service.is_available()
-        ffmpeg_text = "✓ FFmpeg Ativo" if ffmpeg_ok else "✗ FFmpeg Ausente"
-        lbl_ffmpeg = QLabel(ffmpeg_text)
-        lbl_ffmpeg.setProperty("badge", "true")
+        lbl_ff = QLabel("✓ FFmpeg Ativo" if ffmpeg_ok else "✗ FFmpeg Ausente")
+        lbl_ff.setProperty("badge", "true")
         if not ffmpeg_ok:
-            lbl_ffmpeg.setStyleSheet("background-color: #3B1B1B; color: #F87171; border: 1px solid #7F1D1D;")
-        layout.addWidget(lbl_ffmpeg)
-
-        # Hardware Badge
-        hw_text = f"⚡ {self.hw_info['device_name']}" if self.hw_info["cuda_available"] else f"💻 CPU ({self.hw_info['cpu_count']} cores)"
-        if self.hw_info["ram_available_gb"] > 0:
-            hw_text += f" | {self.hw_info['ram_available_gb']:.1f} GB RAM Livre"
-
-        lbl_hw = QLabel(hw_text)
-        lbl_hw.setProperty("badge", "true")
-        layout.addWidget(lbl_hw)
+            lbl_ff.setStyleSheet("background-color: #3B1B1B; color: #F87171; border: 1px solid #7F1D1D;")
+        layout.addWidget(lbl_ff)
 
         return header_frame
 
     def _create_hardware_banner(self, text: str) -> QWidget:
         card = QFrame()
-        card.setStyleSheet("""
-            QFrame {
+        card.setStyleSheet(f"""
+            QFrame {{
                 background-color: #241A12;
-                border: 1px solid #B45309;
-                border-radius: 8px;
-                padding: 10px 16px;
-            }
+                border: 1px solid {COLORS['warning']};
+                border-radius: 6px;
+                padding: 8px 14px;
+            }}
         """)
         layout = QHBoxLayout(card)
         layout.setContentsMargins(8, 4, 8, 4)
-        
         icon = QLabel("⚠️")
-        icon.setStyleSheet("font-size: 14px;")
-        
         lbl = QLabel(text)
-        lbl.setStyleSheet("color: #FDE68A; font-size: 12px; font-weight: 500;")
-        
+        lbl.setStyleSheet(f"color: {COLORS['warning']}; font-size: 12px; font-weight: 500;")
         layout.addWidget(icon)
         layout.addWidget(lbl)
         layout.addStretch()
         return card
 
-    def _create_settings_card(self) -> QFrame:
+    def _create_model_card(self) -> QFrame:
         card = QFrame()
         card.setProperty("card", "true")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(10)
 
-        # Title
-        lbl_title = QLabel("Configurações do Modelo de IA")
-        lbl_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #F8FAFC;")
+        lbl_title = QLabel("Configurações do Motor Neural e DSP")
+        lbl_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #F1F2F4;")
         layout.addWidget(lbl_title)
 
-        # Options layout
         options_layout = QHBoxLayout()
         options_layout.setSpacing(20)
 
         # Model Selector
         model_box = QVBoxLayout()
         lbl_model = QLabel("Modelo de Separação:")
-        lbl_model.setStyleSheet("color: #94A3B8; font-size: 12px; font-weight: 600;")
-        
+        lbl_model.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 600;")
         self.combo_model = QComboBox()
         for model_id, name, desc in DemucsEngine.get_model_choices():
             self.combo_model.addItem(name, model_id)
         self.combo_model.currentIndexChanged.connect(self._on_model_changed)
-        
         model_box.addWidget(lbl_model)
         model_box.addWidget(self.combo_model)
-        options_layout.addLayout(model_box, stretch=2)
+        options_layout.addLayout(model_box, stretch=3)
 
-        # Fidelity options
-        fidelity_box = QVBoxLayout()
-        lbl_fidelity = QLabel("Qualidade e Resolução:")
-        lbl_fidelity.setStyleSheet("color: #94A3B8; font-size: 12px; font-weight: 600;")
+        # DSP Features
+        dsp_box = QVBoxLayout()
+        lbl_dsp = QLabel("Recursos Especiais:")
+        lbl_dsp.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 600;")
 
-        self.chk_match_sr = QCheckBox("Preservar Sample Rate original ao exportar (Sinc)")
-        self.chk_match_sr.setChecked(True)
-        self.chk_match_sr.setToolTip(
-            "Se o arquivo original estiver em 48kHz ou 96kHz, reconstrói as faixas separadas na taxa original usando interpolação sinc."
-        )
-        self.chk_match_sr.setStyleSheet("color: #E2E8F0; font-size: 12px;")
+        self.chk_drum_separation = QCheckBox("Decompor Bateria (Kick, Snare, Hi-Hats, Cymbals, Toms)")
+        self.chk_drum_separation.setChecked(self.settings_mgr.get("experimental_drum_separation", True))
+        self.chk_drum_separation.setToolTip("Aplica processamento DSP acústico para decompor a bateria em elementos individuais.")
 
-        fidelity_box.addWidget(lbl_fidelity)
-        fidelity_box.addWidget(self.chk_match_sr)
-        options_layout.addLayout(fidelity_box, stretch=2)
+        self.chk_match_sr = QCheckBox("Preservar Sample Rate Original")
+        self.chk_match_sr.setChecked(self.settings_mgr.get("match_sample_rate", True))
+
+        dsp_box.addWidget(lbl_dsp)
+        dsp_box.addWidget(self.chk_drum_separation)
+        dsp_box.addWidget(self.chk_match_sr)
+        options_layout.addLayout(dsp_box, stretch=3)
 
         layout.addLayout(options_layout)
 
-        # Description label
         self.lbl_model_desc = QLabel(DemucsEngine.MODELS["htdemucs"]["description"])
-        self.lbl_model_desc.setStyleSheet("color: #94A3B8; font-size: 11px; font-style: italic;")
+        self.lbl_model_desc.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-style: italic;")
         layout.addWidget(self.lbl_model_desc)
 
         return card
 
     def _create_input_source_tabs(self) -> QTabWidget:
-        """Create tabs for switching between YouTube URL and Local Audio File."""
         tabs = QTabWidget()
         tabs.setCursor(Qt.PointingHandCursor)
 
-        # Tab 1: YouTube Link
         yt_tab = self._create_youtube_tab()
-        tabs.addTab(yt_tab, "🔗 Link do YouTube")
+        tabs.addTab(yt_tab, "🔗  Link do YouTube")
 
-        # Tab 2: Local File
         local_tab = self._create_local_file_tab()
-        tabs.addTab(local_tab, "📁 Arquivo Local")
+        tabs.addTab(local_tab, "📁  Arquivo Local")
 
         tabs.currentChanged.connect(self._on_input_tab_changed)
         return tabs
@@ -266,17 +283,15 @@ class MainWindow(QMainWindow):
     def _create_youtube_tab(self) -> QWidget:
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(14)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
-        # Instruction
-        lbl_inst = QLabel("Cole o link do vídeo do YouTube para baixar e separar automaticamente:")
-        lbl_inst.setStyleSheet("color: #F8FAFC; font-size: 13px; font-weight: 600;")
+        lbl_inst = QLabel("Cole o link de áudio ou vídeo do YouTube:")
+        lbl_inst.setStyleSheet("color: #F1F2F4; font-size: 12px; font-weight: 600;")
         layout.addWidget(lbl_inst)
 
-        # Input row with Text Field, Paste and Validate Buttons
         input_row = QHBoxLayout()
-        input_row.setSpacing(10)
+        input_row.setSpacing(8)
 
         self.txt_youtube_url = QLineEdit()
         self.txt_youtube_url.setPlaceholderText("https://www.youtube.com/watch?v=... ou https://youtu.be/...")
@@ -298,57 +313,39 @@ class MainWindow(QMainWindow):
 
         # YouTube Preview Card
         self.card_yt_preview = QFrame()
-        self.card_yt_preview.setStyleSheet("""
-            QFrame {
-                background-color: #1A1D2C;
-                border: 1px solid #2F344B;
-                border-radius: 10px;
-                padding: 12px;
-            }
+        self.card_yt_preview.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 6px;
+                padding: 10px;
+            }}
         """)
         self.card_yt_preview.setVisible(False)
         preview_layout = QVBoxLayout(self.card_yt_preview)
-        preview_layout.setContentsMargins(14, 10, 14, 10)
-        preview_layout.setSpacing(8)
+        preview_layout.setContentsMargins(12, 8, 12, 8)
+        preview_layout.setSpacing(6)
 
-        # Header preview
         prev_head = QHBoxLayout()
         self.lbl_yt_title = QLabel("Título do Vídeo")
-        self.lbl_yt_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #38BDF8;")
-        
+        self.lbl_yt_title.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {COLORS['accent']};")
+
         self.btn_clear_yt = QPushButton("Limpar")
         self.btn_clear_yt.setCursor(Qt.PointingHandCursor)
-        self.btn_clear_yt.setStyleSheet("""
-            QPushButton {
-                background-color: #262A3D;
-                border: 1px solid #3B415E;
-                padding: 4px 10px;
-                font-size: 11px;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background-color: #323852;
-                border-color: #8B5CF6;
-            }
-        """)
         self.btn_clear_yt.clicked.connect(self._clear_youtube_input)
 
         prev_head.addWidget(self.lbl_yt_title, stretch=1)
         prev_head.addWidget(self.btn_clear_yt)
         preview_layout.addLayout(prev_head)
 
-        # Details row
         details_layout = QHBoxLayout()
-        details_layout.setSpacing(20)
-
+        details_layout.setSpacing(16)
         self.lbl_yt_channel = QLabel("Canal: -")
-        self.lbl_yt_channel.setStyleSheet("color: #94A3B8; font-size: 12px;")
-
+        self.lbl_yt_channel.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
         self.lbl_yt_duration = QLabel("Duração: -")
-        self.lbl_yt_duration.setStyleSheet("color: #94A3B8; font-size: 12px;")
-
+        self.lbl_yt_duration.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
         self.lbl_yt_status = QLabel("✓ Pronto para download e separação")
-        self.lbl_yt_status.setStyleSheet("color: #10B981; font-size: 12px; font-weight: 600;")
+        self.lbl_yt_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 11px; font-weight: 600;")
 
         details_layout.addWidget(self.lbl_yt_channel)
         details_layout.addWidget(self.lbl_yt_duration)
@@ -357,63 +354,59 @@ class MainWindow(QMainWindow):
         preview_layout.addLayout(details_layout)
 
         layout.addWidget(self.card_yt_preview)
-
         return container
 
     def _create_local_file_tab(self) -> QWidget:
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(12, 12, 12, 12)
-        
+        layout.setContentsMargins(10, 10, 10, 10)
         self.drop_zone = DropZoneWidget()
         self.drop_zone.sig_file_loaded.connect(self._on_file_loaded)
         self.drop_zone.sig_file_cleared.connect(self._on_file_cleared)
         layout.addWidget(self.drop_zone)
-        
         return container
 
     def _create_processing_card(self) -> QFrame:
         card = QFrame()
         card.setProperty("card", "true")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(14)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(12)
 
-        # 1. Pipeline Steps Flow Indicator
+        # Steps Row
         steps_row = QHBoxLayout()
-        steps_row.setSpacing(8)
-
+        steps_row.setSpacing(6)
         self.step_labels = []
         step_names = [
-            ("step_dl", "1. Obtenção do Áudio"),
-            ("step_ff", "2. Preparação (FFmpeg)"),
-            ("step_ai", "3. Separação por IA"),
-            ("step_done", "4. Concluído")
+            "1. Obtenção",
+            "2. FFmpeg",
+            "3. Demucs IA",
+            "4. Decomposição",
+            "5. Concluído"
         ]
-        for key, name in step_names:
+        for name in step_names:
             lbl = QLabel(name)
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet("""
-                QLabel {
-                    background-color: #1A1D2A;
-                    color: #64748B;
-                    border: 1px solid #282B3E;
-                    border-radius: 6px;
-                    padding: 6px 12px;
-                    font-size: 11px;
+            lbl.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {COLORS['surface']};
+                    color: {COLORS['text_secondary']};
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 4px;
+                    padding: 5px 10px;
+                    font-size: 10px;
                     font-weight: 600;
-                }
+                }}
             """)
             steps_row.addWidget(lbl, stretch=1)
             self.step_labels.append(lbl)
-
         layout.addLayout(steps_row)
 
-        # 2. Buttons row
+        # Buttons Row
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(12)
+        btn_row.setSpacing(10)
 
-        self.btn_separate = QPushButton("⚡ Separar Áudio com IA")
+        self.btn_separate = QPushButton("⚡  Separar Áudio com IA")
         self.btn_separate.setProperty("primary", "true")
         self.btn_separate.setCursor(Qt.PointingHandCursor)
         self.btn_separate.setEnabled(False)
@@ -437,20 +430,18 @@ class MainWindow(QMainWindow):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        # 3. Progress bar and status
+        # Progress Bar and Status
         self.progress_container = QWidget()
         self.progress_container.setVisible(False)
         p_layout = QVBoxLayout(self.progress_container)
         p_layout.setContentsMargins(0, 0, 0, 0)
-        p_layout.setSpacing(6)
+        p_layout.setSpacing(4)
 
         status_row = QHBoxLayout()
         self.lbl_status = QLabel("Aguardando início...")
-        self.lbl_status.setStyleSheet("color: #38BDF8; font-weight: 600; font-size: 12px;")
-
+        self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-weight: 600; font-size: 11px;")
         self.lbl_dl_details = QLabel("")
-        self.lbl_dl_details.setStyleSheet("color: #94A3B8; font-size: 11px; font-weight: 500;")
-
+        self.lbl_dl_details.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
         status_row.addWidget(self.lbl_status)
         status_row.addStretch()
         status_row.addWidget(self.lbl_dl_details)
@@ -462,48 +453,50 @@ class MainWindow(QMainWindow):
         p_layout.addWidget(self.progress_bar)
 
         layout.addWidget(self.progress_container)
-
         return card
 
     def _create_stems_container(self) -> QFrame:
         card = QFrame()
         card.setProperty("card", "true")
         self.stems_card_layout = QVBoxLayout(card)
-        self.stems_card_layout.setContentsMargins(20, 16, 20, 16)
-        self.stems_card_layout.setSpacing(12)
+        self.stems_card_layout.setContentsMargins(18, 14, 18, 14)
+        self.stems_card_layout.setSpacing(10)
 
-        lbl_title = QLabel("Faixas Separadas (Stems)")
-        lbl_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #F8FAFC;")
+        lbl_title = QLabel("Mixer Multi-Track — Faixas Separadas")
+        lbl_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #F1F2F4;")
         self.stems_card_layout.addWidget(lbl_title)
 
         self.stems_rows_layout = QVBoxLayout()
-        self.stems_rows_layout.setSpacing(10)
+        self.stems_rows_layout.setSpacing(8)
         self.stems_card_layout.addLayout(self.stems_rows_layout)
 
         return card
 
     def _set_active_step_badge(self, active_index: int):
-        """Update step visual indicators (0: Download, 1: FFmpeg, 2: Demucs, 3: Done)."""
-        styles = {
-            "idle": "background-color: #1A1D2A; color: #64748B; border: 1px solid #282B3E; border-radius: 6px; padding: 6px 12px; font-size: 11px; font-weight: 600;",
-            "active": "background-color: #2D1B4E; color: #C4B5FD; border: 1px solid #8B5CF6; border-radius: 6px; padding: 6px 12px; font-size: 11px; font-weight: 700;",
-            "done": "background-color: #064E3B; color: #6EE7B7; border: 1px solid #059669; border-radius: 6px; padding: 6px 12px; font-size: 11px; font-weight: 700;"
-        }
         for idx, lbl in enumerate(self.step_labels):
             if idx < active_index:
-                lbl.setStyleSheet(styles["done"])
+                lbl.setStyleSheet(f"background-color: #1C2B22; color: #6EE7B7; border: 1px solid {COLORS['success']}; border-radius: 4px; padding: 5px 10px; font-size: 10px; font-weight: 700;")
             elif idx == active_index:
-                lbl.setStyleSheet(styles["active"])
+                lbl.setStyleSheet(f"background-color: {COLORS['surface']}; color: {COLORS['accent']}; border: 1px solid {COLORS['accent']}; border-radius: 4px; padding: 5px 10px; font-size: 10px; font-weight: 700;")
             else:
-                lbl.setStyleSheet(styles["idle"])
+                lbl.setStyleSheet(f"background-color: {COLORS['surface']}; color: {COLORS['text_secondary']}; border: 1px solid {COLORS['border']}; border-radius: 4px; padding: 5px 10px; font-size: 10px; font-weight: 600;")
 
     def _reset_step_badges(self):
         for lbl in self.step_labels:
-            lbl.setStyleSheet("background-color: #1A1D2A; color: #64748B; border: 1px solid #282B3E; border-radius: 6px; padding: 6px 12px; font-size: 11px; font-weight: 600;")
+            lbl.setStyleSheet(f"background-color: {COLORS['surface']}; color: {COLORS['text_secondary']}; border: 1px solid {COLORS['border']}; border-radius: 4px; padding: 5px 10px; font-size: 10px; font-weight: 600;")
 
     # =========================================================================
-    # YouTube URL Handlers
+    # Event Handlers & Slots
     # =========================================================================
+    def _on_page_changed(self, index: int):
+        self.pages_stack.setCurrentIndex(index)
+        if index == 1:
+            self.page_history.refresh_list()
+
+    def _on_settings_saved(self):
+        self.chk_drum_separation.setChecked(self.settings_mgr.get("experimental_drum_separation", True))
+        self.chk_match_sr.setChecked(self.settings_mgr.get("match_sample_rate", True))
+
     def _on_paste_url(self):
         clipboard_text = QApplication.clipboard().text().strip()
         if clipboard_text:
@@ -526,15 +519,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "URL Inválida",
-                "A URL inserida não corresponde a um link válido do YouTube.\n"
-                "Exemplo suportado: https://www.youtube.com/watch?v=..."
+                "A URL inserida não é um link válido ou seguro do YouTube.\n"
+                "Exemplo: https://www.youtube.com/watch?v=..."
             )
             return
 
         self.btn_fetch_info.setEnabled(False)
         self.btn_fetch_info.setText("Consultando...")
-
-        # Worker assíncrono para não travar a GUI
         self.info_fetcher = InfoFetcherWorker(url, parent=self)
         self.info_fetcher.sig_info_ready.connect(self._on_youtube_info_ready)
         self.info_fetcher.sig_error.connect(self._on_youtube_info_error)
@@ -543,25 +534,19 @@ class MainWindow(QMainWindow):
     def _on_youtube_info_ready(self, info: dict):
         self.btn_fetch_info.setEnabled(True)
         self.btn_fetch_info.setText("🔍 Validar Link")
-
         self.lbl_yt_title.setText(info.get("title", "Título Desconhecido"))
         self.lbl_yt_channel.setText(f"Canal: {info.get('channel', 'Desconhecido')}")
         dur = info.get("duration", 0)
         self.lbl_yt_duration.setText(f"Duração: {format_duration(dur)}")
         self.lbl_yt_status.setText("✓ Vídeo validado e pronto para separação")
         self.card_yt_preview.setVisible(True)
-
         if self.input_tabs.currentIndex() == 0:
             self.btn_separate.setEnabled(True)
 
     def _on_youtube_info_error(self, err_msg: str):
         self.btn_fetch_info.setEnabled(True)
         self.btn_fetch_info.setText("🔍 Validar Link")
-        QMessageBox.warning(
-            self,
-            "Não foi possível obter informações",
-            f"Falha ao consultar informações do vídeo no YouTube:\n{err_msg}"
-        )
+        QMessageBox.warning(self, "Falha na Consulta", f"Não foi possível obter dados do YouTube:\n{err_msg}")
 
     def _clear_youtube_input(self):
         self.txt_youtube_url.clear()
@@ -570,15 +555,12 @@ class MainWindow(QMainWindow):
             self.btn_separate.setEnabled(False)
 
     def _on_input_tab_changed(self, index: int):
-        if index == 0:  # YouTube tab
+        if index == 0:
             url = self.txt_youtube_url.text().strip()
             self.btn_separate.setEnabled(self.yt_downloader.is_valid_url(url))
-        else:  # Local file tab
+        else:
             self.btn_separate.setEnabled(self.loaded_filepath is not None)
 
-    # =========================================================================
-    # Local File Handlers
-    # =========================================================================
     def _on_model_changed(self, index: int):
         model_id = self.combo_model.currentData()
         if model_id in DemucsEngine.MODELS:
@@ -605,31 +587,27 @@ class MainWindow(QMainWindow):
         self.player.stop()
         self.transport.set_duration(0.0)
 
-    # =========================================================================
-    # Pipeline Execution & Slots
-    # =========================================================================
     def _start_separation(self):
         current_tab = self.input_tabs.currentIndex()
-
         if current_tab == 0:
-            # YouTube URL Mode
             url = self.txt_youtube_url.text().strip()
             if not self.yt_downloader.is_valid_url(url):
-                QMessageBox.warning(self, "Aviso", "Por favor, insira uma URL válida do YouTube antes de iniciar.")
+                QMessageBox.warning(self, "Aviso", "Por favor, insira uma URL válida do YouTube.")
                 return
             mode = "url"
             source = url
         else:
-            # Local File Mode
             if not self.loaded_filepath or not os.path.exists(self.loaded_filepath):
-                QMessageBox.warning(self, "Aviso", "Por favor, selecione um arquivo de áudio válido antes de iniciar.")
+                QMessageBox.warning(self, "Aviso", "Por favor, selecione um arquivo de áudio válido.")
                 return
             mode = "file"
             source = self.loaded_filepath
 
         model_id = self.combo_model.currentData()
+        out_base_dir = self.settings_mgr.get_output_dir()
+        enable_drum = self.chk_drum_separation.isChecked()
 
-        # Update GUI controls state
+        # Update GUI controls
         self.btn_separate.setEnabled(False)
         self.btn_cancel.setVisible(True)
         self.btn_cancel.setEnabled(True)
@@ -637,22 +615,23 @@ class MainWindow(QMainWindow):
         self.input_tabs.setEnabled(False)
         self.progress_container.setVisible(True)
         self.progress_bar.setValue(0)
-        self.lbl_status.setText("Preparando pipeline de separação de áudio...")
+        self.lbl_status.setText("Iniciando pipeline SamukaLab...")
         self.lbl_dl_details.setText("")
         self._set_active_step_badge(0 if mode == "url" else 1)
         self.stems_card.setVisible(False)
         self.player.stop()
 
-        # Instantiate unified pipeline worker
         self.pipeline_worker = UnifiedPipelineWorker(
             mode=mode,
             source=source,
-            output_base_dir="output",
+            output_base_dir=out_base_dir,
             model_name=model_id,
             device_name=self.hw_info["device"],
             shifts=1,
             overlap=0.25,
             match_sample_rate=self.chk_match_sr.isChecked(),
+            enable_drum_separation=enable_drum,
+            auto_export=False,
             parent=self
         )
         self.pipeline_worker.sig_stage_changed.connect(self._on_worker_stage_changed)
@@ -679,8 +658,11 @@ class MainWindow(QMainWindow):
         elif stage_id == "separate":
             self._set_active_step_badge(2)
             self.lbl_dl_details.setText("")
-        elif stage_id in ("organize", "done"):
+        elif stage_id == "drums":
             self._set_active_step_badge(3)
+            self.lbl_dl_details.setText("")
+        elif stage_id in ("organize", "done"):
+            self._set_active_step_badge(4)
             self.lbl_dl_details.setText("")
 
     def _on_worker_progress(self, percent: int, message: str):
@@ -691,46 +673,32 @@ class MainWindow(QMainWindow):
         speed = details.get("speed_str", "")
         eta = details.get("eta_str", "")
         if speed:
-            self.lbl_dl_details.setText(f"Velocidade: {speed} | ETA: {eta}")
+            self.lbl_dl_details.setText(f"Taxa: {speed} | ETA: {eta}")
 
     def _on_worker_finished(self, stems_dict: Dict[str, np.ndarray], sample_rate: int, metadata: dict, output_folder: Optional[str] = None):
-        """Método de retrocompatibilidade com a suíte de testes existente."""
-        self._on_pipeline_finished(stems_dict, sample_rate, metadata, output_folder or os.path.abspath("output"))
+        """Retrocompatibilidade com chamadas de suites anteriores."""
+        self._on_pipeline_finished(stems_dict, sample_rate, metadata, output_folder or "")
 
     def _on_pipeline_finished(self, stems_dict: Dict[str, np.ndarray], sample_rate: int, metadata: dict, output_folder: str):
         self.stems = stems_dict
         self.stem_sample_rate = sample_rate
         self.loaded_metadata = metadata
-        self.current_output_folder = output_folder
+        self.current_output_folder = output_folder if (output_folder and os.path.exists(output_folder)) else None
 
         self.btn_separate.setEnabled(True)
         self.btn_cancel.setVisible(False)
         self.btn_cancel.setEnabled(True)
-        self.btn_open_folder.setVisible(True)
+        self.btn_open_folder.setVisible(self.current_output_folder is not None)
         self.input_tabs.setEnabled(True)
-        self._set_active_step_badge(3)
-        self.lbl_status.setText("Separação e organização concluídas com sucesso!")
-        self.lbl_dl_details.setText(f"Salvo em: {os.path.basename(output_folder)}")
+        self._set_active_step_badge(4)
+        self.lbl_status.setText("Separação concluída com sucesso! Ouça e avalie as faixas no mixer. Exporte quando desejar.")
+        self.lbl_dl_details.setText("Stems em memória temporária (prontos para reprodução)")
 
-        # Load stems into synchronized playback engine
+        # Carregar faixas no mixer sincronizado
         self.player.load_stems(self.stems, sample_rate=sample_rate)
         self.transport.set_duration(self.player.duration_seconds)
-
-        # Build stem rows in GUI
         self._populate_stems(self.stems, self.player.duration_seconds)
         self.stems_card.setVisible(True)
-
-        # User feedback popup (apenas se a interface estiver interativa e visível)
-        if self.isVisible() and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
-            reply = QMessageBox.information(
-                self,
-                "Separação Concluída com Sucesso!",
-                f"O áudio foi separado com sucesso por IA e salvo na pasta:\n\n{output_folder}\n\n"
-                f"Deseja abrir a pasta agora para conferir as faixas?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply == QMessageBox.Yes:
-                self._on_open_output_folder()
 
     def _on_worker_error(self, error_message: str):
         self.btn_separate.setEnabled(True)
@@ -740,7 +708,7 @@ class MainWindow(QMainWindow):
         self._reset_step_badges()
         self.lbl_status.setText("Falha no processamento.")
         self.lbl_dl_details.setText("")
-        QMessageBox.critical(self, "Erro no Processamento", error_message)
+        QMessageBox.critical(self, "Erro no SamukaLab", error_message)
 
     def _on_worker_cancelled(self):
         self.btn_separate.setEnabled(True)
@@ -752,14 +720,12 @@ class MainWindow(QMainWindow):
         self.lbl_dl_details.setText("")
 
     def _on_open_output_folder(self):
-        folder = self.current_output_folder
-        if not folder or not os.path.exists(folder):
-            folder = os.path.abspath("output")
-        os.makedirs(folder, exist_ok=True)
+        folder = self.current_output_folder or self.settings_mgr.get_output_dir()
+        if not os.path.exists(folder):
+            os.makedirs(folder, exist_ok=True)
         self._open_folder(folder)
 
     def _populate_stems(self, stems_dict: Dict[str, np.ndarray], duration_sec: float):
-        # Clear existing rows safely
         for i in reversed(range(self.stems_rows_layout.count())):
             item = self.stems_rows_layout.takeAt(i)
             widget = item.widget() if item else None
@@ -774,13 +740,11 @@ class MainWindow(QMainWindow):
             widget.sig_solo_toggled.connect(self._on_stem_solo_toggled)
             widget.sig_audition_requested.connect(self._on_stem_audition_requested)
             widget.sig_export_requested.connect(self._on_stem_export_requested)
-            
+
             self.stem_widgets[stem_name] = widget
             self.stems_rows_layout.addWidget(widget)
 
-    # =========================================================================
-    # Stem Control Slots
-    # =========================================================================
+    # Stem Mixer Slots
     def _on_stem_volume_changed(self, stem_name: str, volume: float):
         self.player.set_stem_volume(stem_name, volume)
 
@@ -804,7 +768,7 @@ class MainWindow(QMainWindow):
                 widget.is_solo = False
                 widget._update_solo_style()
                 self.player.set_stem_solo(name, False)
-        
+
         self.player.play()
         self.playback_timer.start()
         self.transport.set_playing_state(True)
@@ -823,7 +787,6 @@ class MainWindow(QMainWindow):
             default_filename,
             "Arquivos WAV (*.wav)"
         )
-
         if not out_path:
             return
 
@@ -836,16 +799,14 @@ class MainWindow(QMainWindow):
                 original_metadata=self.loaded_metadata,
                 match_original_sample_rate=match_sr
             )
-            
             reply = QMessageBox.information(
                 self,
                 "Exportação Concluída",
-                f"Faixa exportada com sucesso em alta resolução:\n{out_path}\n\nDeseja abrir a pasta?",
+                f"Faixa exportada com sucesso:\n{out_path}\n\nDeseja abrir a pasta?",
                 QMessageBox.Yes | QMessageBox.No
             )
             if reply == QMessageBox.Yes:
                 self._open_folder(os.path.dirname(out_path))
-
         except Exception as e:
             QMessageBox.critical(self, "Erro na Exportação", f"Falha ao exportar a faixa:\n{str(e)}")
 
@@ -853,15 +814,17 @@ class MainWindow(QMainWindow):
         if not self.stems:
             return
 
-        output_dir = QFileDialog.getExistingDirectory(
-            self,
-            "Selecione a Pasta para Exportar Todas as Faixas",
-            ""
-        )
+        default_dir = self.settings_mgr.get_output_dir()
+        output_dir = QFileDialog.getExistingDirectory(self, "Selecione a Pasta para Exportação", default_dir)
         if not output_dir:
             return
 
-        base_name = os.path.splitext(self.loaded_metadata["filename"])[0] if self.loaded_metadata else "faixas"
+        song_title = ""
+        if self.loaded_metadata:
+            song_title = self.loaded_metadata.get("song_title") or os.path.splitext(self.loaded_metadata.get("filename", "faixas"))[0]
+        if not song_title:
+            song_title = "faixas"
+
         match_sr = self.chk_match_sr.isChecked()
 
         try:
@@ -869,21 +832,57 @@ class MainWindow(QMainWindow):
                 stems=self.stems,
                 stem_sample_rate=self.stem_sample_rate,
                 output_directory=output_dir,
-                base_name=base_name,
+                base_name=song_title,
                 original_metadata=self.loaded_metadata,
                 match_original_sample_rate=match_sr
             )
 
+            # Gravar relatório de viabilidade de bateria se aplicável
+            drum_metrics_report = self.loaded_metadata.get("drum_metrics_report") if self.loaded_metadata else None
+            if drum_metrics_report:
+                report_path = os.path.join(output_dir, "drum_separation_report.txt")
+                try:
+                    with open(report_path, "w", encoding="utf-8") as f:
+                        f.write("=" * 65 + "\n")
+                        f.write("   SAMUKALAB — RELATÓRIO DE DECOMPOSIÇÃO DE BATERIA\n")
+                        f.write("=" * 65 + "\n\n")
+                        f.write(f"Faixa: {song_title}\n")
+                        f.write(f"Taxa de amostragem: {self.stem_sample_rate} Hz\n\n")
+                        f.write("MÉTRICAS DE ENERGIA E CONFIANÇA DE ISOLAMENTO:\n")
+                        for elem, met in drum_metrics_report.metrics.items():
+                            f.write(f"  • {elem:20s}: Confiança={met['isolation_confidence']:8s} | "
+                                    f"Energia={met['energy_ratio']:5.1f}% | Pico={met['peak_amplitude']:.3f}\n")
+                        f.write("\n" + "-" * 65 + "\n")
+                        f.write("AVALIAÇÃO DE LIMITAÇÃO ACÚSTICA:\n")
+                        f.write(drum_metrics_report.limitations_note + "\n")
+                        f.write("=" * 65 + "\n")
+                except Exception:
+                    pass
+
+            # Registrar projeto no histórico de projetos
+            self.history_mgr.add_entry(
+                title=song_title,
+                mode=getattr(self.pipeline_worker, "mode", "file") if self.pipeline_worker else "file",
+                source=getattr(self.pipeline_worker, "source", self.loaded_filepath or "") if self.pipeline_worker else (self.loaded_filepath or ""),
+                output_dir=output_dir,
+                stems_list=list(self.stems.keys()),
+                duration_s=self.loaded_metadata.get("duration", self.player.duration_seconds if self.player else 0.0) if self.loaded_metadata else 0.0,
+                model_name=self.combo_model.currentData(),
+                has_drum_separation=any("Drum:" in k for k in self.stems.keys())
+            )
+
+            self.current_output_folder = output_dir
+            self.btn_open_folder.setVisible(True)
+
             file_list_str = "\n".join([f"• {os.path.basename(p)}" for p in exported])
             reply = QMessageBox.information(
                 self,
-                "Exportação Concluída",
-                f"{len(exported)} faixas exportadas com sucesso em alta fidelidade WAV para:\n{output_dir}\n\n{file_list_str}\n\nDeseja abrir a pasta?",
+                "Exportação Concluída — SamukaLab",
+                f"{len(exported)} faixas exportadas com sucesso para:\n{output_dir}\n\n{file_list_str}\n\nDeseja abrir a pasta?",
                 QMessageBox.Yes | QMessageBox.No
             )
             if reply == QMessageBox.Yes:
                 self._open_folder(output_dir)
-
         except Exception as e:
             QMessageBox.critical(self, "Erro na Exportação", f"Falha ao exportar faixas:\n{str(e)}")
 
@@ -893,9 +892,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    # =========================================================================
     # Playback Transport Slots
-    # =========================================================================
     def _on_transport_play(self):
         try:
             self.player.play()
@@ -933,7 +930,6 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
-        """Clean up audio streams and workers on window close."""
         self.playback_timer.stop()
         if self.player:
             self.player.stop()
@@ -942,4 +938,9 @@ class MainWindow(QMainWindow):
             self.pipeline_worker.wait(2000)
         if self.info_fetcher and self.info_fetcher.isRunning():
             self.info_fetcher.wait(1000)
+        # Limpar temporários órfãos com segurança
+        try:
+            SafeTempManager().cleanup_orphaned_temporaries(max_age_seconds=0)
+        except Exception:
+            pass
         event.accept()

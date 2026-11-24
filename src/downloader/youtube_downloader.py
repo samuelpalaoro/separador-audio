@@ -7,6 +7,7 @@ import unicodedata
 from typing import Dict, Any, Optional, Callable
 import yt_dlp
 from PySide6.QtCore import QThread, Signal
+from src.security.validator import SecurityValidator, SecurityValidationError
 
 
 class InfoFetcherWorker(QThread):
@@ -58,11 +59,17 @@ class YouTubeDownloader:
 
     @classmethod
     def is_valid_url(cls, url: str) -> bool:
-        """Verifica se a URL fornecida é uma URL sintaticamente válida do YouTube."""
+        """Verifica se a URL fornecida é uma URL sintaticamente válida do YouTube e segura contra SSRF."""
         if not url or not isinstance(url, str):
             return False
         clean_url = url.strip()
-        return bool(cls.YOUTUBE_REGEX.match(clean_url))
+        if not cls.YOUTUBE_REGEX.match(clean_url):
+            return False
+        try:
+            SecurityValidator.validate_url(clean_url)
+            return True
+        except Exception:
+            return False
 
     @classmethod
     def extract_video_id(cls, url: str) -> Optional[str]:
@@ -77,28 +84,16 @@ class YouTubeDownloader:
     @classmethod
     def sanitize_filename(cls, name: str, max_length: int = 100) -> str:
         """
-        Sanitiza o título da faixa para uso seguro em pastas e arquivos no Linux.
-        Remove caracteres reservados, normaliza acentos e limita tamanho.
+        Sanitiza o título da faixa contra path traversal e caracteres reservados.
         """
-        if not name:
-            return "audio"
-        # Normalizar unicode (NFC)
-        name = unicodedata.normalize('NFC', name)
-        # Substituir caracteres proibidos por underscore
-        clean = re.sub(r'[\\/*?:"<>|\0]', '_', name)
-        # Reduzir múltiplos espaços e underscores consecutivos
-        clean = re.sub(r'[\s_]+', '_', clean).strip('_ .')
-        if not clean:
-            clean = "audio"
-        return clean[:max_length]
+        return SecurityValidator.sanitize_path_slug(name, max_length=max_length)
 
     def get_video_info(self, url: str) -> Dict[str, Any]:
         """
         Extrai metadados do vídeo (título, duração, canal, thumbnail)
-        sem efetuar download do fluxo de mídia.
+        sem efetuar download do fluxo de mídia com validações de segurança.
         """
-        if not self.is_valid_url(url):
-            raise ValueError(f"URL inválida para o YouTube: '{url}'")
+        clean_url = SecurityValidator.validate_url(url)
 
         ydl_opts = {
             'quiet': True,
@@ -118,8 +113,18 @@ class YouTubeDownloader:
                 if 'entries' in info and info['entries']:
                     info = info['entries'][0]
 
+                if info.get("is_live"):
+                    raise ValueError("Transmissões ao vivo (live streams) não são suportadas para separação de áudio.")
+
                 raw_title = info.get('title') or "Sem Título"
                 duration = int(info.get('duration') or 0)
+
+                if duration > SecurityValidator.MAX_DURATION_SECONDS:
+                    raise ValueError(
+                        f"Duração do vídeo ({duration}s) excede o limite máximo permitido de segurança "
+                        f"({SecurityValidator.MAX_DURATION_SECONDS}s / {SecurityValidator.MAX_DURATION_SECONDS//60} min)."
+                    )
+
                 channel = info.get('uploader') or info.get('channel') or "Desconhecido"
                 video_id = info.get('id') or self.extract_video_id(url) or "video"
                 thumbnail = info.get('thumbnail') or ""

@@ -31,16 +31,16 @@ def main():
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
     
     app = QApplication(sys.argv)
-    app.setApplicationName("Moises AI - Separador de Áudio")
-    app.setOrganizationName("DeepMind")
-    app.setApplicationVersion("1.0.0")
+    app.setApplicationName("SamukaLab — Audio DSP & AI Workstation")
+    app.setOrganizationName("SamukaLab")
+    app.setApplicationVersion("2.0.0")
 
     window = MainWindow()
 
     # If an audio file was provided as a command-line argument, load it directly
     if len(sys.argv) > 1:
         cli_file = sys.argv[1]
-        if os.path.isfile(cli_file) and cli_file.lower().endswith((".wav", ".wave")):
+        if os.path.isfile(cli_file):
             window.drop_zone.load_file(cli_file)
 
     window.show()
